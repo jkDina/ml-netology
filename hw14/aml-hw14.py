@@ -55,18 +55,10 @@ if amount <= 5:
         def predict(self, user_id, n_recommendations=10):
             return self.predictions[:n_recommendations]
 
-    time_range = sorted(ratings['timestamp'])
-    border_timestamp = time_range[int(len(time_range) * 0.85)]
-
-    X_train = ratings[ratings.timestamp < border_timestamp]
-    X_test = ratings[ratings.timestamp >= border_timestamp]
-    #print(X_train)
-
     model = TopRecommender()
-    model.fit(X_train)
+    model.fit(ratings)
     recoms = model.predict(user_id)
 
-    #print('recoms = ', recoms)
     for rec in recoms:
         print(movies[movies.movieId == rec[0]].iloc[0].title)
 
@@ -87,11 +79,8 @@ elif 5 < amount <= 20:
 
     movie_ids = movies.movieId
 
-
     for index, movie_id in enumerate(movie_ids):
-        #print('index = ', index)
         movie_id_to_index[movie_id] = index
-    #print('movie_id_to_index = ', movie_id_to_index)
 
         
     #получаем индексы фильмов
@@ -112,25 +101,23 @@ elif 5 < amount <= 20:
         data.append(row)
          
     X_train, X_test, y_train, y_test = train_test_split(data, target, test_size=0.3)
-    model = DecisionTreeRegressor()
+    model = RandomForestRegressor()
     model.fit(X_train, y_train)
-
     predictions = model.predict(X_test)
-    print('predictions', predictions)
+    print('mean_squared_error = ', mean_squared_error(y_test, predictions))
 
-    for index in reversed(np.argsort(predictions)):
-        row = X_test[index]
-        for i, r in enumerate(data):
-            if r is row:
-                index_ = movie_indexes[i]
-                #print('i = ', i, index_)
-                print(movies.iloc[index_].title)
-                continue
-                
+    #предсказываем оценки для еще не просмотренных фильмов
+    new_movies = movies[~movies.movieId.isin(user_movies.movieId)]
+    new_movie_ids = []
+    for movie_id in new_movies.movieId.values:
+        movie_index = movie_id_to_index[movie_id]
+        row = X_train_tfidf.getrow(movie_index).toarray()[0]
+        new_movie_ids.append(row)
 
-    
-    #print('real', list(y_test))
-    #print('mean_squared_error = ', mean_squared_error(y_test, predictions))
+    scores = model.predict(new_movie_ids)
+    #рекомендуем 20 фильмов
+    for index in list(reversed(np.argsort(scores)))[:20]:
+        print(new_movies.iloc[index].title)
 else:
     #рекомендации на основе SVD разложения
     n_components = 30
@@ -145,12 +132,10 @@ else:
     user_interactions = interactions_matrix.getrow(user_id - 1)
     user_low_dimensions = model.transform(user_interactions)
 
-    print('user_low_dimensions = ', user_low_dimensions)
     user_predictions = model.inverse_transform(user_low_dimensions)[0]
     recommendations = []
-    print(user_predictions)  
 
-    max_n = 20
+    max_n = 200
     #Пробегаем по колонкам в порядке убывания предсказанного значения
     for movie_idx in reversed(np.argsort(user_predictions)):
         #Добавляем фильм к рекомендациям только если пользователь его еще не смотрел
@@ -162,10 +147,9 @@ else:
             if (len(recommendations) >= max_n):
                 break
         
-    print('recommendations = ', recommendations)
-    for rec in recommendations:
-        print(movies[movies.movieId == rec[0]].iloc[0].title)
-
+    #print('recommendations = ', recommendations)
+    #for rec in recommendations:
+        #print(movies[movies.movieId == rec[0]].iloc[0].title)
       
     #добавим учет тегов 
     movies_with_tags = movies.join(tags.set_index('movieId'), on='movieId')
@@ -178,20 +162,12 @@ else:
     X_train_counts = count_vect.fit_transform(tag_strings)
     tfidf_transformer = TfidfTransformer()
     X_train_tfidf = tfidf_transformer.fit_transform(X_train_counts)
-    print('shape = ',X_train_tfidf.shape, X_train_tfidf.getrow(0).toarray()[0])
-    print('shape = ',movies_with_tags.movieId.unique().shape)
-    print('len ', len(tag_strings), tag_strings[0])
-
-    #movies_ = movies[movies['movieId'].isin(tags.movieId)]
-
-
+    
     movie_id_to_index = {}
     movie_ids = movies_with_tags.movieId.unique()
-    print('movie_ids = ', movie_ids)
 
     for index, movie_id in enumerate(movie_ids):
         movie_id_to_index[movie_id] = index
-        #print(movie_id, index)
         
     #отбираем строки относящееся к данному user
     user_ratings = ratings[ratings['userId'] == user_id]
@@ -211,12 +187,10 @@ else:
     target = user_ratings.rating
     
     #используем строки матрицы для создания векторов фильмов
-    print('movie_indexes = ', movie_indexes)
     for movie_index in movie_indexes:
         row = X_train_tfidf.getrow(movie_index).toarray()[0]
         data.append(row)
         
-    #X_train, X_test, y_train, y_test = train_test_split(data, target, test_size=0.1)
     model2 = RandomForestRegressor()
     model2.fit(data, target)
 
@@ -230,19 +204,16 @@ else:
             pred_data.append([0] * X_train_tfidf.shape[1])
 
     predictions2 = model2.predict(pred_data)
-    predictions2 = predictions2 / np.max(predictions2)
+    predictions2 = predictions2 / (np.max(predictions2) + np.max([x[1] for x in recommendations]))
 
     #к score из SVD прибавим score по тегам
     result_recommendations = np.array([x[1] for x in recommendations]) + predictions2
 
-    print('recommendations = ', recommendations)
-    print('predictions2 = ', predictions2)
-    print('result_recommendations = ', result_recommendations)
-    for i, rec in enumerate(result_recommendations):
+    #print('recommendations = ', recommendations)
+    #print('predictions2 = ', predictions2)
+    #print('result_recommendations = ', result_recommendations)
+    for i, rec in enumerate(sorted(result_recommendations, reverse=True)[:20]):
         print(movies[movies.movieId == recommendations[i][0]].iloc[0].title)
     
     
-    #print(list(reversed(np.argsort(predictions))))
-    #print('predictions', predictions)
-    #print('real', list(y_test))
-    #print('mean_squared_error = ', mean_squared_error(y_test, predictions))
+    
